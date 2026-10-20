@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AR Model Viewer</title>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1220; --card: #181c30; --line: #2a3050; --text: #eef0fa;
+    --muted: #9aa3c7; --accent: #7c5cff; --accent2: #38d6c4; --danger: #ff5c7c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .app { max-width: 720px; margin: 0 auto; padding: 16px; padding-bottom: 40px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+  p.sub { margin: 0 0 16px; color: var(--muted); font-size: .92rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 14px; }
+  .pick { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
+  .pick:last-child { margin-bottom: 0; }
+  .pick strong { display: block; }
+  .pick small { color: var(--muted); }
+  .pick .name { color: var(--accent2); font-size: .85rem; margin-top: 4px; word-break: break-all; }
+  .pick input { display: none; }
+  .pick.ok { border-color: var(--accent2); border-style: solid; }
+  .stage { position: relative; height: 55vh; min-height: 320px; border-radius: 16px; overflow: hidden;
+    background: radial-gradient(circle at 50% 30%, #262c52, #12152a); border: 1px solid var(--line); }
+  model-viewer { width: 100%; height: 100%; --poster-color: transparent; background: transparent; }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    color: var(--muted); padding: 24px; pointer-events: none; }
+  .row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  button { flex: 1 1 160px; border: 0; border-radius: 12px; padding: 14px 16px; font-size: 1rem; font-weight: 600;
+    color: #fff; background: var(--accent); cursor: pointer; }
+  button.alt { background: #2b3358; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .msg { margin-top: 12px; font-size: .88rem; color: var(--muted); min-height: 1.2em; }
+  .msg.err { color: var(--danger); }
+  .tips { font-size: .82rem; color: var(--muted); line-height: 1.5; }
+  .tips li { margin-bottom: 4px; }
+
+  /* Camera overlay mode */
+  #camLayer { position: fixed; inset: 0; z-index: 50; background: #000; display: none; }
+  #camLayer.on { display: block; }
+  #camVideo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #camHost { position: absolute; inset: 0; }
+  #camHost model-viewer { width: 100%; height: 100%; }
+  #camBar { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+    display: flex; gap: 10px; background: linear-gradient(transparent, rgba(0,0,0,.6)); }
+  #camHint { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center;
+    font-size: .82rem; color: #fff; text-shadow: 0 1px 4px #000; padding: 0 16px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>AR Model Viewer</h1>
+  <p class="sub">Upload your 3D model, then view it in your real space through your phone camera.</p>
+
+  <div class="card">
+    <label class="pick" id="glbPick">
+      <strong>1. Upload GLB file</strong>
+      <small>Required (Android + preview + camera view)</small>
+      <div class="name" id="glbName"></div>
+      <input type="file" id="glbInput" accept=".glb,.gltf,model/gltf-binary" />
+    </label>
+    <label class="pick" id="usdzPick">
+      <strong>2. Upload USDZ file</strong>
+      <small>Optional, used by iPhone / iPad AR Quick Look</small>
+      <div class="name" id="usdzName"></div>
+      <input type="file" id="usdzInput" accept=".usdz,model/vnd.usdz+zip" />
+    </label>
+  </div>
+
+  <div class="stage">
+    <model-viewer id="mv"
+      camera-controls touch-action="pan-y" auto-rotate shadow-intensity="1" exposure="1"
+      ar ar-modes="webxr scene-viewer quick-look" ar-scale="auto" ar-placement="floor"
+      interaction-prompt="auto">
+    </model-viewer>
+    <div class="empty" id="empty">Upload a GLB file to see your model here</div>
+  </div>
+
+  <div class="row">
+    <button id="arBtn" disabled>View in AR</button>
+    <button id="camBtn" class="alt" disabled>Camera view</button>
+  </div>
+  <div class="msg" id="msg"></div>
+
+  <div class="card tips" style="margin-top:14px">
+    <strong>How it works</strong>
+    <ul>
+      <li><b>View in AR</b> asks for camera access, then places the model on your floor or table and lets you walk around it. Needs Android Chrome with ARCore, or iPhone/iPad Safari.</li>
+      <li><b>Camera view</b> works on any phone: it shows the live camera with your model floating on top. Drag to rotate, pinch to resize.</li>
+      <li>Camera access needs <b>HTTPS</b>. Opening the file directly from storage will not work. Host it (GitHub Pages, Netlify) and open that link on your phone.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- Camera overlay -->
+<div id="camLayer">
+  <video id="camVideo" autoplay playsinline muted></video>
+  <div id="camHost"></div>
+  <div id="camHint">Drag to rotate &middot; Pinch to zoom</div>
+  <div id="camBar">
+    <button class="alt" id="camFlip">Flip camera</button>
+    <button id="camClose" style="background:var(--danger)">Close</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const mv = $('mv'), msg = $('msg');
+let glbUrl = null, usdzUrl = null, camStream = null, facing = 'environment';
+
+function say(t, err) { msg.textContent = t || ''; msg.className = 'msg' + (err ? ' err' : ''); }
+
+$('glbInput').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (glbUrl) URL.revokeObjectURL(glbUrl);
+  glbUrl = URL.createObjectURL(f);
+  mv.src = glbUrl;
+  $('glbName').textContent = f.name;
+  $('glbPick').classList.add('ok');
+  $('empty').style.display = 'none';
+  $('arBtn').disabled = false;
+  $('camBtn').disabled = false;
+  say('Model loaded. Tap "View in AR" or "Camera view".');
+});
+
+$('usdzInput').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (usdzUrl) URL.revokeObjectURL(usdzUrl);
+  usdzUrl = URL.createObjectURL(f);
+  mv.setAttribute('ios-src', usdzUrl);
+  $('usdzName').textContent = f.name;
+  $('usdzPick').classList.add('ok');
+  say('USDZ added for iPhone / iPad AR.');
+});
+
+mv.addEventListener('error', () => say('Could not load this model. Check that it is a valid GLB file.', true));
+
+// Native AR
+$('arBtn').addEventListener('click', async () => {
+  if (!mv.canActivateAR) {
+    say('AR is not supported on this device or browser. Try "Camera view" instead, or open this page on a phone over HTTPS.', true);
+    return;
+  }
+  try { await mv.activateAR(); }
+  catch (err) { say('AR could not start: ' + (err && err.message ? err.message : err), true); }
+});
+
+// Camera overlay
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('Camera is not available. Open this page over HTTPS.');
+  }
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
+  });
+  $('camVideo').srcObject = camStream;
+}
+
+$('camBtn').addEventListener('click', async () => {
+  try {
+    await startCamera();
+  } catch (err) {
+    say('Camera permission was denied or unavailable. ' + (err && err.message ? err.message : ''), true);
+    return;
+  }
+  // Move the same viewer into the overlay so the model is shared
+  mv.removeAttribute('auto-rotate');
+  mv.removeAttribute('ar');
+  $('camHost').appendChild(mv);
+  mv.style.background = 'transparent';
+  $('camLayer').classList.add('on');
+});
+
+function closeCam() {
+  $('camLayer').classList.remove('on');
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  $('camVideo').srcObject = null;
+  document.querySelector('.stage').insertBefore(mv, $('empty'));
+  mv.setAttribute('ar', '');
+  mv.setAttribute('auto-rotate', '');
+}
+$('camClose').addEventListener('click', closeCam);
+
+$('camFlip').addEventListener('click', async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  try { await startCamera(); } catch (e) { facing = 'environment'; }
+});
+</script>
+</body>
+</html>
